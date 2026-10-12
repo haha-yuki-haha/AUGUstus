@@ -1,0 +1,92 @@
+# AUGUstus_SFT — NAVSIM training config (Qwen3.5-2B Transfusion SFT)
+# All paths use ${VAR} placeholders resolved from the environment defined by
+# env.sh (repo root) — the single place holding machine-specific paths.
+cot:
+  cot_components:
+  - prediction
+  cot_temperature: 0.7
+  cot_top_k: 0
+  cot_top_p: 0.0
+  enable_cot: true
+  max_cot_tokens: 512
+  action_first_generate_cot: true
+  use_action_first: true
+data:
+  data_format: hf_cache
+  metric_cache_test: ${NAVSIM_EXP_ROOT}/metric_cache_test
+  metric_cache_train: ${NAVSIM_EXP_ROOT}/metric_cache_train
+  prompt_file: prompts/default.txt
+  train_data_path: ${AUGUSTUS_DATA_ROOT}/4_data_2048_512/hf_cache_train_CoT_Solution
+  val_data_path: ${AUGUSTUS_DATA_ROOT}/4_data_2048_512/hf_cache_test_CoT_Solution
+  video_fps: 2
+  video_max_frames: 4
+diffusion:
+  action_loss_weight: 1.0
+  ada_layer_mode: full
+  cfg_scale: 1.0
+  clip_sample_range: 0.0
+  goal_point_weight: 0.0
+  lambda_diffusion: 10.0
+  lambda_lm: 1.0
+  num_inference_steps: 1
+  recon_loss_weight: 1.0
+  timestep_shift: 1.0
+model:
+  freeze_llm: false
+  freeze_vision_encoder: false
+  model_type: qwen3.5
+  qwen_model_name: ${QWEN35_2B_PATH}
+  special_FFN:
+    dim: null
+    enabled: false
+    is_bp_combine: true
+  special_QKVO:
+    KV: false
+    QO: false
+normalization:
+  action_norm: true
+  dim_weights:
+  - 1.0
+  - 1.0
+  - 1.0
+  stats_file: ${AUGUSTUS_DATA_ROOT}/4_data_2048_512/action_norm_stats.json
+resume:
+  enabled: false
+  resume_path: null
+training:
+  backbone_lr_scale: 1.0
+  best_metric: PDMS
+  dataloader_num_workers: 8
+  ema_decay: 0.9999
+  ema_enable: false
+  ema_update_every: 10
+  eval_steps: 400
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-05
+  logger:
+  - console
+  logging_steps: 10
+  lr_scheduler: cosine
+  max_checkpoints: 3
+  max_grad_norm: 1.0
+  min_lr: 1.0e-06
+  mixed_precision: bf16
+  num_epochs: 100
+  output_dir: ${AUGUSTUS_MODEL_ROOT}/${training.run_name}
+  per_device_eval_batch_size: 64
+  per_device_train_batch_size: 32
+  run_name: navsim-qwen3p5-2b-vit-AdaW-cot_prediction_action_first-fm-x0-adanorm-raw-dit-lr1e-5_clip0.0_diff10_bs256-2048_512
+  save_optimizer: true
+  save_steps: 400
+  seed: 42
+  wandb_project: transfusion-navsim
+  # swanlab API key, resolved from env.sh (AUGUSTUS_SWANLAB_TOKEN). Empty ->
+  # offline/local logging only (SWANLAB_MODE defaults to "offline"; export
+  # SWANLAB_MODE=cloud to sync to swanlab.cn for run comparison).
+  wandb_token: ${AUGUSTUS_SWANLAB_TOKEN:-}
+  warmup_steps: 100
+  weight_decay: 0.1
+trajectory:
+  action_dim: 3
+  action_repr: absolute
+  traj_token: 8

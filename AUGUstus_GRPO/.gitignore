@@ -1,0 +1,24 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- environments / IDE ---
+.venv/
+.idea/
+.vscode/
+
+# --- training/dev outputs (never ship these) ---
+outputs/
+logs/
+*.log
+
+# --- Ray / SwanLab local caches ---
+ray_session/
+swanlab/

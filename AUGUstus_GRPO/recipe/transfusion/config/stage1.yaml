@@ -1,0 +1,669 @@
+# ============================================================================
+# Transfusion x verl — GRPO/PPO RL config (NAVSIM Qwen3.5-2B diffusion planner)
+# ============================================================================
+# This is the DEFAULT RL recipe — "original GRPO" (token-level: the one-step
+# diffusion trajectory is a regression token, the CoT is autoregressive). The
+# diffusion-specialised variants are sibling configs that only override the
+# trajectory loss / rollout:
+#   - transfusion_navsim_qwen3p5_flow_grpo.yaml      -> Flow-GRPO
+#   - transfusion_navsim_qwen3p5_diffusion_nft.yaml  -> DiffusionNFT
+#
+# It swaps the data / model / reward surfaces AND surfaces the most common RL /
+# training knobs (algorithm, batch sizes, lr, checkpoint freq + retention) so they
+# are easy to see and tune. Anything not listed here still inherits from `ppo_trainer`.
+#
+# Launch (Hydra adds this dir to the search path; `ppo_trainer` resolves from
+# verl/trainer/config):
+#   python -m verl.trainer.main_ppo \
+#     --config-dir recipe/transfusion/config \
+#     --config-name transfusion_navsim_qwen3p5
+# See recipe/transfusion/run_grpo_transfusion.sh for the full launcher (it also
+# exports TRANSFUSION_CONFIG / TRANSFUSION_ROOT used by the model engine/rollout).
+# ============================================================================
+
+defaults:
+  - ppo_trainer        # inherit ALL verl RL defaults
+  - _self_             # then apply the overrides below
+
+# ----------------------------------------------------------------------------
+# (0) RL ALGORITHM + ADVANTAGE
+# ----------------------------------------------------------------------------
+algorithm:
+  # Group-relative advantage (recommended for this recipe). Other options: gae,
+  # reinforce_plus_plus, rloo, ... The diffusion-RL variant (Flow-GRPO /
+  # DiffusionNFT) is selected separately via actor_rollout_ref.rollout.rl_algorithm
+  # (unset here = original token-level GRPO).
+  adv_estimator: grpo
+  # KL / clip knobs keep their ppo_trainer defaults (full list + all other RL
+  # hyper-params: verl/trainer/config/ppo_trainer.yaml). Uncomment to override:
+  # use_kl_in_reward: false              # subtract a KL-to-ref penalty from the reward
+  # kl_penalty: kl                       # kl | abs | mse | low_var_kl
+  # kl_ctrl: { kl_coef: 0.001, target_kl: 0.1 }
+
+# ----------------------------------------------------------------------------
+# (1) DATA  — point verl at the Transfusion NAVSIM hf_cache via the custom dataset
+# ----------------------------------------------------------------------------
+data:
+  # verl `custom_cls` hook -> recipe.transfusion.dataset.TransfusionRLDataset
+  custom_cls:
+    path: pkg://recipe.transfusion.dataset
+    name: TransfusionRLDataset
+
+  # ---- batch / length knobs (surfaced for tuning) ----
+  # See docs/BATCH_SIZE.md for the full tuning guide (OOM checklist, effective
+  # per-GPU rollout batch formula, train_batch_size vs rollout.n tradeoffs). In
+  # short: THIS recipe's rollout has NO internal micro-batching, so per-GPU rollout
+  # batch = train_batch_size * actor_rollout_ref.rollout.n / (nnodes * n_gpus_per_node)
+  # -- raising either one directly raises the rollout's peak GPU memory.
+  train_batch_size: 32         # prompts sampled per RL step (ppo_trainer default 1024)
+  max_response_length: 256     # CoT token budget (lower this first if you OOM and
+                                # response_length/mean in SwanLab is well under 512)
+
+  # Validation MUST cover the FULL val split (average reported over every
+  # sample) -- so val_max_samples stays uncapped. The default `use_sft_style_
+  # validation` below bypasses this driver-side `val_dataloader`: every Ray
+  # worker decodes/evaluates only its own contiguous shard and returns small
+  # metric sums, mirroring Transfusion SFT eval. `val_batch_size` is retained
+  # only as the size knob for the LEGACY fallback when the SFT-style switch is
+  # disabled (and to derive the default per-GPU SFT eval batch, 256 / 8 = 32).
+  val_max_samples: -1
+  # GLOBAL/total count across ALL GPUs (same semantics as train_batch_size, NOT
+  # per-GPU). Legacy fallback only: each val_dataloader batch is one DataProto
+  # handed to generate_sequences and then sharded across all rollout workers.
+  val_batch_size: 256   ## global legacy chunk = nodes * n_gpus * per-GPU batch
+  # Deterministic val iteration order (dataset order). REQUIRED so the sample
+  # logger's first-10 logged samples match the bounded set the dataset keeps
+  # raw PIL frames for (dataset.py keep_raw_frames cap) -- shuffling would log
+  # samples whose frames were dropped, and carrying decoded frames for ALL ~12k
+  # val samples costs GBs of pickle/RPC traffic per chunk.
+  validation_shuffle: false
+  # Parallel video decode / AutoProcessor in BOTH dataloaders. The per-sample
+  # __getitem__ (video decode + processor + chat template) is the in-training
+  # validation's dominant serial cost (~3-4 s/sample): with W workers the full
+  # ~12k split costs ~12160*3.5/W seconds wall-time, so 8 workers ~= 1.5 h and
+  # 96 workers ~= 7 min -- fully overlappable with the rollout of the previous
+  # chunk via DataLoader prefetch. 96 leaves headroom for the PDMS reward pool
+  # (128 procs) + Ray workers on this 192-core node.
+  dataloader_num_workers: 96
+  # train uses small per-step batches (train_batch_size), so it needs no cap.
+  train_max_samples: -1
+
+  # Supervised training hf_cache directories, resolved from env.sh.
+  train_files: ${oc.env:AUGUSTUS_DATA_ROOT}/4_data_2048_512/hf_cache_train_CoT_Solution
+  val_files: ${oc.env:AUGUSTUS_DATA_ROOT}/4_data_2048_512/hf_cache_test_CoT_Solution
+
+  # NAVSIM PDMS metric caches (per split). TransfusionRLDataset picks the TRAIN
+  # cache during training and the TEST cache during validation, so PDMS is available
+  # for BOTH splits (the cache is keyed by scene token, which differs per split).
+  # Keep both set — a missing split cache => no PDMS reward for that split.
+  # Build them with AUGUstus_SFT's NAVSIM_Cache.sh (see docs/DATA_PREPARATION.md §5).
+  metric_cache_train: ${oc.env:NAVSIM_EXP_ROOT}/metric_cache_train
+  metric_cache_test: ${oc.env:NAVSIM_EXP_ROOT}/metric_cache_test
+
+  # Transfusion-specific knobs consumed by TransfusionRLDataset (free sub-block).
+  # The model/data STRUCTURE knobs (traj_token, action_dim, enable_cot,
+  # cot_components, prompt_file, the action_first switch, ...) are intentionally NOT here:
+  # they are read from $TRANSFUSION_CONFIG (the trained run's config_original.yaml)
+  # so they can never drift from the checkpoint. Add a key below only to OVERRIDE.
+  transfusion:
+    transfusion_root: ${oc.env:TRANSFUSION_ROOT}
+    # Tokenizer + image/video processor for the RL dataset (AutoProcessor.from_pretrained).
+    # Self-contained: the TRAINED model's own HF dir (best/pytorch_model), NOT the
+    # original Qwen3.5-2B backbone. Kept in sync with actor_rollout_ref.model.path.
+    qwen_model_name: ${actor_rollout_ref.model.path}
+    # Use the bundled prompt template, overriding the architecture config's
+    # data.prompt_file through data.transfusion.prompt_file.
+    prompt_file: ${oc.env:AUGUSTUS_SFT_ROOT}/prompts/default.txt
+    # is_training=true => the dataset yields the SUPERVISED targets (GT trajectory +
+    # CoT teacher-forcing tokens) used to build each sample's reward ground truth
+    # (gt_trajectory / gt_cot_text); false => inference-only input assembly.
+    is_training: true
+    data_source: navsim_transfusion
+    # SFT-style validation: each Ray worker decodes/evaluates only its own
+    # contiguous shard (like Transfusion's accelerate eval), instead of decoding
+    # on the driver and shipping 256 multimodal samples through DataProto/Ray.
+    # 32/GPU * 8 GPUs matches the SFT eval batching.
+    use_sft_style_validation: true
+    sft_val_batch_size_per_gpu: 32
+    sft_val_num_workers_per_gpu: 8
+    sft_val_pdms_workers_per_gpu: 8
+
+# ----------------------------------------------------------------------------
+# (2) MODEL — replace the HF causal-LM with the Transfusion diffusion planner
+# ----------------------------------------------------------------------------
+actor_rollout_ref:
+  model:
+    # TOKENIZER + hf_config source for verl. SELF-CONTAINED: the TRAINED model's
+    # own HF dir — best/pytorch_model (config.json + tokenizer.json + the embedded
+    # image/video processor + model.safetensors), NOT the original Qwen3.5-2B
+    # backbone. The FULL Transfusion planner (model_qwen3p5.py::TransfusionQwen3p5)
+    # is still assembled ON TOP by build_transfusion_model from:
+    #   * $TRANSFUSION_CONFIG : model architecture config (a trained run's config_original.yaml)
+    #   * $TRANSFUSION_CKPT   : the TRAINED checkpoint whose weights are loaded
+    #                           (best/ -> pytorch_model/model.safetensors).
+    # TRANSFUSION_QWEN_MODEL_NAME (ray_kwargs below) makes build_model's backbone +
+    # in-model AutoProcessor load from this SAME dir, so nothing reads the original
+    # Qwen3.5-2B backbone. Env-overridable; keep model.path == that env var.
+    path: ${oc.env:TRANSFUSION_QWEN_MODEL_NAME}
+    trust_remote_code: true
+    # custom training engine (recipe.transfusion.model_engine registers it)
+    model_type: transfusion_diffusion
+    # imported in every process (driver + Ray workers) so the custom rollout +
+    # engine registries are populated without editing verl core.
+    external_lib: recipe.transfusion.registrations
+
+  # ---- actor optimiser + update batch sizes (surfaced for tuning) ----
+  # docs/BATCH_SIZE.md #2/#3: if the ACTOR UPDATE step OOMs (not rollout), lower
+  # ppo_micro_batch_size_per_gpu first (already at the floor of 1 here) then try
+  # fsdp_config.param_offload / optimizer_offload (both default false -> trade
+  # speed for memory).
+  actor:
+    optim:
+      lr: 1.0e-6                       # actor learning rate
+    # actor-update minibatch in PROMPTS (verl semantics: one optimizer step per
+    # mini_batch_size * rollout.n experiences). The custom Transfusion update
+    # (sync_driver.update_transfusion_actor) supports MULTIPLE mini-batches when
+    # ppo_mini_batch_size < train_batch_size: train_batch_size / ppo_mini_batch_size
+    # mini-batches, each with its own optimizer step — the FIRST is on-policy,
+    # the rest are off-policy (importance ratio corrects for weight drift).
+    # Set ppo_mini_batch_size = train_batch_size for strictly on-policy (1 step).
+    # ppo_micro_batch_size_per_gpu is the per-GPU grad-accum chunk INSIDE each
+    # mini-batch's optimizer step. With rollout.n=8 and 8 GPUs, each GPU gets
+    # 128 experiences per update (train_batch_size=128); 16 = 8 grad-accum chunks.
+    ppo_mini_batch_size: 32           # < train_batch_size => off-policy (multiple optim steps); == train_batch_size => on-policy
+    # Per-GPU micro-batch for the actor update. 16 keeps 2 gradient-accumulation
+    # chunks per step (32 experiences/GPU / 16). The causal_conv1d fast path,
+    # per-layer gradient checkpointing (model_engine.py), the cache-free
+    # full-sequence denoise (_denoise_fullseq_step), and checkpointed
+    # vocab-projection chunks (cot_logprob) lower peak memory, but this 2B
+    # multimodal update is still near the 80 GB edge; set 32 for one chunk only
+    # after confirming no OOM.
+    ppo_micro_batch_size_per_gpu: 32   # per-GPU micro-batch: 2 grad-accum chunks (32/16)
+    # FSDP wrapping knobs (rest inherit from ppo_trainer). use_orig_params=true is
+    # REQUIRED whenever the ViT is frozen (TRANSFUSION_FREEZE_VIT=true, the default
+    # below): FSDP-1 flattens each wrapped unit into ONE flat parameter and rejects
+    # a unit that mixes frozen + trainable tensors ("Must flatten tensors with
+    # uniform requires_grad when use_orig_params=False"). Keeping the original
+    # (unflattened) params lets a frozen visual tower coexist with the trainable
+    # planner/CoT in the same wrap. Freezing the ViT ALSO cuts the actor update's
+    # compute (no visual-tower backward) and memory (no ViT grads/optimizer state),
+    # which is the main lever against the update_actor OOM/slowness on this 2B model.
+    fsdp_config:
+      use_orig_params: true
+    # NOTE: the KL-to-REFERENCE penalty for this recipe is configured through
+    # rollout.rl_kl_coef below, NOT verl's actor.use_kl_loss -- enabling the
+    # stock knob would make verl build its own reference worker + call the
+    # HF-logits ref-log-prob path, which the Transfusion model does not support.
+
+  rollout:
+    # Parse this rollout block with the recipe's RolloutConfig subclass instead of
+    # verl's stock one, so verl accepts (a) mode=sync (the Transfusion trajectory
+    # rollout is synchronous) and (b) the diffusion-RL selector fields below
+    # (rl_algorithm/rl_num_steps/rl_noise_level). Stock RolloutConfig rejects both.
+    _target_: recipe.transfusion.rollout_config.TransfusionRolloutConfig
+    # diffusion-trajectory rollout (recipe.transfusion.rollout self-registers it)
+    name: transfusion
+    mode: sync
+    # ---- CoT sampling (TRAINING rollouts) ----
+    # Autoregressive CoT sampling knobs, forwarded to the Transfusion CoT sampler
+    # (_generate_cot_after_action). Raising temperature / top_p (or top_k) widens
+    # the within-group CoT diversity that the token-level GRPO ratio learns from.
+    # top_k <= 0 disables top-k (vLLM convention). Validation CoT is unaffected.
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 100
+    # samples per prompt = GRPO group size (advantage computed within a group).
+    # docs/BATCH_SIZE.md #1/#4: THIS directly multiplies the rollout's per-GPU
+    # batch (no internal micro-batching) -- first knob to lower if you OOM during
+    # rollout generation (timing_s/gen), at the cost of noisier GRPO advantages.
+    n: 8
+    # per-GPU micro-batch for the log-prob recompute forward pass. Required by
+    # verl's validate_config whenever actor.use_dynamic_bsz is false (as here);
+    # mirrors actor.ppo_micro_batch_size_per_gpu (memory-safe for the 2B model).
+    log_prob_micro_batch_size_per_gpu: 32
+    # ---- rollout generation micro-batch (OOM guard) ----
+    # The synchronous Transfusion rollout has NO internal micro-batching, so
+    # train_batch_size=128 * rollout.n=8 / 8 GPUs = 128 samples/GPU OOMs on
+    # the 2B multimodal model. Set this to chunk the generation into smaller
+    # forward passes and concatenate the results. null = no chunking (safe
+    # when train_batch_size is small). 32 matches ppo_micro_batch_size_per_gpu.
+    rl_gen_micro_batch_size: 256
+
+    # Diffusion-RL algorithm: null = original token-level GRPO. Set to flow_grpo /
+    # diffusion_nft (or just launch the matching sibling config); also overridable
+    # via the TRANSFUSION_RL_ALGORITHM env var.
+    rl_algorithm: null
+    # Denoising steps used to produce the trajectory action for TRAINING
+    # rollouts. Applies to ALL algorithms: the original-GRPO path overrides the
+    # checkpoint's num_inference_steps (=1, one-step SFT) with this for its
+    # multi-step action; Flow-GRPO / DiffusionNFT use it as the SDE/ODE sampler
+    # horizon. Also overridable via the TRANSFUSION_RL_NUM_STEPS env var.
+    rl_num_steps: 3
+    # Denoising steps for the IN-TRAINING VALIDATION rollouts (verl's _validate
+    # tags the gen batch with meta_info['validate']=True). null -> same as
+    # rl_num_steps. (Standalone evaluation outside RL training is configured
+    # separately: Transfusion/test_qwen3p5.py --num_inference_steps, or
+    # NUM_INFERENCE_STEPS in Transfusion/scripts/test_checkpoint.sh.)
+    rl_val_num_steps: 1
+    # Reverse-time SDE diffusion coefficient g(t) SCHEDULE (Flow-GRPO / DanceGRPO /
+    # DiffusionNFT all share this kernel; only the LOSS differs). One of:
+    #   flow_grpo -> g = a*sqrt(t/(1-t))    (Flow-GRPO original; diverges at t=1)
+    #   dancegrpo -> g = eta                (DanceGRPO constant; finite everywhere)
+    #   lambda_t  -> g = a*sqrt(t)          (proposed; finite at t=1, clean at t=0)
+    # rl_noise_level below is this schedule's scalar hyper-parameter (a / eta / a)
+    # and scales the per-step std LINEARLY in every schedule. Overridable via
+    # TRANSFUSION_RL_NOISE_SCHEDULE.
+    rl_noise_schedule: lambda_t
+    # SDE stochasticity = the schedule's scalar hyper-parameter (0 -> deterministic
+    # ODE). With lambda_t + rl_num_steps=1 the sampled action is
+    #   x0_hat - (a^2/2)*x_1 + a*eps  --  i.e. the ODE output x0_hat plus Gaussian
+    # exploration of std = a in the normalised [-1,1] action space, so a = 0.1
+    # stays visually close to the noise-free trajectory while giving GRPO its
+    # within-group diversity. A SCALAR or a PER-DIMENSION LIST [x, y, heading]
+    # (each dim gets its own std scale). Overridable via TRANSFUSION_RL_NOISE_LEVEL
+    # (env accepts "0.1" or "0.1,0.1,0.05").
+    rl_noise_level: [0.05, 0.05, 0.02]
+      # rl_noise_level: [0.10, 0.10, 0.04]
+    # rl_noise_level: [[0.1, 0.1, 0.04], [0.05, 0.05, 0.02], [0.01, 0.01, 0.004], [0.005, 0.005, 0.002]]
+    # ---- CoT sampling for IN-TRAINING VALIDATION rollouts ----
+    # Sampling knobs for the CoT text generated during validation. null -> reuse
+    # the TRAINING-rollout sampling knobs above (temperature/top_p/top_k), which
+    # keeps val generations as diverse as the ones GRPO trains on. Previously the
+    # SFT-style validation silently fell back to $TRANSFUSION_CONFIG's `cot.cot_*`
+    # eval defaults (temperature 0.7, no top-p/top-k filtering) — the same
+    # low-diversity settings used in supervised eval. Set explicit values here to
+    # decouple val sampling from training sampling (e.g. temperature 0.1 for
+    # near-greedy val rollouts).
+    rl_val_cot_temperature: null
+    rl_val_cot_top_p: null
+    rl_val_cot_top_k: null
+    # ---- CoT length cap for IN-TRAINING VALIDATION rollouts ----
+    # Max number of CoT CONTENT tokens the validation sampler may generate.
+    # 256 = the training response budget (data.max_response_length); the sampler
+    # uses budget-1 so the forced EOT fits inside the window. This keeps the
+    # validation CoT from filling up to the model's native max_cot_tokens (512)
+    # with post-</prediction> junk (the CoT collapse). null would fall back to
+    # data.max_response_length (256) as well.
+    rl_val_cot_max_len: 128
+    # KL-to-REFERENCE penalty coefficient for the hybrid-GRPO actor update
+    # (0 = off). Computed per head with the SAME machinery as the importance
+    # ratios: the trajectory head uses the closed-form Gaussian KL between the
+    # two policies' x0 predictions (jit_grpo_step_logratio_kl), the CoT head
+    # uses the per-token probability k3 estimator -- both against a frozen
+    # reference model (a copy of the initial policy made at the first actor
+    # update, i.e. before any weight sync). Deliberately a recipe-level knob:
+    # verl's actor.use_kl_loss would spin up the stock HF-logits ref worker,
+    # which the Transfusion model does not support.
+    rl_kl_coef: 0.01
+    # Per-head overrides of rl_kl_coef (unset -> both heads share
+    # rl_kl_coef). Kept at the SAME value as rl_kl_coef here so
+    # behaviour is unchanged; decouple them to e.g. raise the CoT-side
+    # anchor (anti CoT-collapse) without over-penalising the
+    # trajectory head.
+    rl_action_kl_coef: 0.001
+    rl_cot_kl_coef: 0.01
+    # Estimator for the DIAGNOSTIC CoT new-vs-old approx KL (actor/cot_approx_kl;
+    # metrics only — the loss is unaffected by this choice):
+    #   k1 = mean(old - new) — the PPO convention; cheap, but can go NEGATIVE
+    #        under finite-sample fluctuation (that is estimator noise, not a bug).
+    #   k3 = exp(gap) - 1 - gap with gap = old - new (clamped to ±20, value clamped
+    #        to ±10 like the ref-KL above) — pointwise NON-negative, lower variance
+    #        (verl's low_var_kl convention).
+    rl_cot_kl_estimator: k3
+    # ---- PPO clip ranges (SEPARATE per head) ----
+    # clip = [1 - epsilon_low, 1 + epsilon_high]. The action (trajectory,
+    # JiT-GRPO closed-form ratio) and CoT (token-level PPO ratio) heads get
+    # their OWN lower / upper epsilons, overriding verl's shared
+    # actor.clip_ratio / clip_ratio_high above. Defaults = verl's 0.2 (symmetric).
+    rl_action_clip_low: 0.2         # action lower epsilon: ratio clipped to [1-0.2, ...]
+    rl_action_clip_high: 0.2        # action upper epsilon (... 1+0.2]
+    rl_cot_clip_low: 0.2            # CoT lower epsilon: ratio clipped to [1-0.2, ...]
+    rl_cot_clip_high: 0.2           # CoT upper epsilon (... 1+0.2]
+    # ---- SPLIT GRPO ADVANTAGE (per-head group-relative advantage) ----
+    # Default (false): BOTH the action (trajectory) and CoT heads share the SAME
+    # single scalar group advantage computed from the total ``score`` -- the
+    # legacy behaviour, byte-for-byte reproducible.
+    # When true: each head gets its OWN group-relative advantage derived from only
+    # the sub-reward it can influence (so the two LEARNING TARGETS stop polluting
+    # each other):
+    #   * action head -> the PLANNING block (soft_L2 + PDMS);
+    #   * CoT head    -> the PREDICTION block (+ CoT format / verbosity penalties).
+    # Without this, the CoT head drifts on trajectory outcomes it cannot influence
+    # (cot_ref_kl blows up, CoT fills the response), and the action head is polluted
+    # by CoT prediction sampling noise.
+    # NOTE: this DOES NOT, by itself, rebalance soft_L2 vs PDMS inside the action
+    # head -- those are still summed into one ``reward_action`` and the group
+    # z-score is scale-invariant, so raising the pdms weight alone leaves the
+    # group ranking unchanged. To make the action head actually climb PDMS instead
+    # of imitating the GT, combine with ``rl_reward_norm`` (GDPO) below. See
+    # recipe/transfusion/docs/SPLIT_ADVANTAGE.md for the full rationale.
+    # train_only_action: when true, skip CoT generation during rollout, skip
+    # all CoT loss / KL / ref-logprob computation in the actor update, and skip
+    # prediction reward in the reward function. Only the action (diffusion
+    # trajectory) head is trained; the LM head weights stay at their SFT init.
+    train_only_action: false
+
+    rl_split_advantage: true
+    # ---- GDPO REWARD NORM (Group reward-Decoupled Normalization, arXiv 2601.05242) ----
+    # Default (false): the TOTAL reward is normalized once (verl's group z-score),
+    # so a high-variance component (soft_L2) floods the others (PDMS ~100:1) and
+    # the advantage structure loses fine-grained distinctions.
+    # When true: each reward component (prediction / soft_L2 / PDMS) is normalized
+    # on its OWN within its GRPO group first, weighted by its coef_* and summed,
+    # then the whole batch is whitened once -- i.e. GDPO. This makes the
+    # coefficients the REAL lever between soft_L2 and PDMS, and preserves more
+    # distinct advantage levels. This is a drop-in DRIVER-side advantage
+    # computation; it does not touch verl core and is independent of (and can be
+    # combined with) ``rl_split_advantage``.
+    rl_reward_norm: false
+
+
+# ----------------------------------------------------------------------------
+# (3) REWARD — L2 + PDMS + CoT(bbox-IoU + future-position correctness)
+# ----------------------------------------------------------------------------
+reward:
+  custom_reward_function:
+    path: pkg://recipe.transfusion.reward_function
+    name: compute_score
+    reward_kwargs:
+      # PDMS metric caches. Each sample already carries its OWN split-correct
+      # metric_cache_path from the dataset — data.metric_cache_train during TRAINING,
+      # data.metric_cache_test during VALIDATION — and the reward uses that FIRST, so
+      # PDMS is computed against the TRAIN cache while training. Both are passed here
+      # as the config-level fallback (one path can't serve both splits); the reward
+      # prefers the train cache in that fallback.
+      metric_cache_train: ${data.metric_cache_train}
+      metric_cache_test: ${data.metric_cache_test}
+      # Two-part reward (see recipe.transfusion.transfusion_reward.compute_total_reward):
+      #   score = prediction * prediction_reward
+      #         + planning   * (soft_l2 * soft_l2_reward
+      #                        + endpoint * endpoint_reward
+      #                        + pdms * PDMS
+      #                        + safe * safe_reward)
+      # * prediction_reward: from the CoT <prediction> block (detection IoU x
+      #   future-position accuracy, gated by the prediction FORMAT).
+      # * planning: from the diffusion TRAJECTORY — a bounded soft-L2 reward, a
+      #   tightness-tunable endpoint (FDE) reward, the NAVSIM closed-loop PDM
+      #   Score, and the DAC/TTC safety reward (TTC+DAC, hard-gated to 0
+      #   when NC/DAC/TTC/EP is 0). Every PDM sub-metric (PDMS/NC/DAC/DDC/EP/TTC/C) and the
+      #   coefficients (coef_*) are logged to SwanLab (train+val).
+      weights:
+        prediction: 1.0        # weight of the CoT <prediction> reward
+        planning: 5.0          # weight of the whole planning block
+        soft_l2: 0.0           # soft-L2 sub-weight (inside planning)
+        endpoint: 0.0          # endpoint (FDE) sub-weight (inside planning)
+        pdms: 1.0              # PDM Score sub-weight (inside planning)
+        safe: 0.0              # safe_reward = sum(safe_metrics); 0 when ANY safe_gates is 0
+        # safe_reward composition: safe_metrics are the PDM sub-metrics SUMMED
+        # (added) into safe_reward; safe_gates are the PDM sub-metrics that must
+        # ALL be non-zero, otherwise safe_reward = 0 (and, with
+        # safe_gates_planning below, the whole planning block). Each name:
+        # PDMS / NC / DAC / DDC / EP / TTC / C(comfortable), case-insensitive.
+        # The values below are exactly the original behaviour (TTC + DAC, gated
+        # by NC/DAC/TTC/EP) — edit the lists to add/move metrics, e.g. append
+        # C to safe_metrics to also reward comfort, and/or to safe_gates to
+        # zero the reward when C == 0.
+        safe_metrics: [TTC, DAC]
+        safe_gates: [NC, DAC, TTC, EP]
+        # ABNORMAL REVERSE (backing-up) trajectory gate - targets the "reverse
+        # to farm the metrics" hack on short-GT scenes: PDMS is blind to motion
+        # plausibility (backing up 0.3-1 m neither collides, nor leaves the
+        # drivable area, nor lowers EP enough to fail any gate).
+        # reverse_travel_m = total backward (negative-x) travel of the planned
+        # trajectory in metres, counted from the ORIGIN (waypoint 0 = [0,0,0]):
+        # a first waypoint with x < 0 already counts as reversing. ALWAYS
+        # logged under that metric key.
+        # reverse_gate: only true/false. false (default) = do nothing (current
+        # experiments unchanged). true = as soon as ANY trajectory point
+        # reverses (any negative-x segment, with the origin counted as waypoint
+        # 0), the WHOLE planning reward is hard-zeroed (as if a safety gate
+        # had failed). No metre threshold, no GT exemption.
+        reverse_gate: true
+        # reverse_gate_m (LEGACY, kept for resume compat): metre threshold with the
+        # OLD semantics: a rollout whose pred reverses MORE than this many metres has
+        # its WHOLE planning reward hard-zeroed (as if a safety gate had failed)
+        # UNLESS the GT itself reverses past it (legitimate backing-up scenes are
+        # EXEMPT). null (default) = OFF. Old GT sample caches carrying this key keep
+        # working. Either gate (this one OR reverse_gate) firing zeroes the block.
+        reverse_gate_m: null
+
+
+        # safe_gates_planning: scratch2's safety gate over the WHOLE planning block.
+        # The gate inputs come from the NAVSIM closed-loop simulation:
+        #   NC  = no_at_fault_collisions, DAC = drivable_area_compliance,
+        #   TTC = time_to_collision_within_bound, EP = ego_progress.
+        #   gate FAILS  (ANY of NC/DAC/TTC/EP == 0) -> ENTIRE planning block = 0
+        #                                               (endpoint is wiped out too)
+        #   gate PASSES (none is 0)               -> planning =
+        #     1.0 * endpoint_reward            (L1 FDE schedule, [0,1])
+        #   + 1.0 * safe_reward = (TTC + DAC)  ([0,2])
+        #   + 0.0 * PDMS + 0.0 * soft_l2       (off)
+        # i.e. EXACTLY scratch2_softerrrrr2's planning = TTC + DAC + endpoint_r,
+        # and planning is in (0, 3] when the gate passes, 0 when it fails.
+        safe_gates_planning: false
+        iou_threshold: 0.5     # bbox match threshold for the prediction reward
+        soft_l2_mode: exp      # "exp" -> exp(-dist/scale) ; "piecewise" -> metre thresholds
+        soft_l2_scale: 2.0     # metres (exp mode); larger = softer
+        # soft_l2_endpoint: which trajectory distance feeds the soft-L2 shaping
+        # (and is reported as the "L2" metric):
+        #   false -> ADE: mean displacement over ALL 8 waypoints (== scratch2's
+        #            l2_loss; == every prior run's L2/soft_l2 curves)   [keep]
+        #   true  -> FDE: final-waypoint error only (already covered separately
+        #            by the FDE / endpoint metrics)
+        # NOTE: this run has soft_l2: 0.0, so this switch has NO effect on the
+        # reward — it only sets the definition of the logged "L2"/"soft_l2"
+        # curves. ADE and FDE are always BOTH logged regardless. false keeps the
+        # curves comparable with the stage-1 run and the eval repro.
+        soft_l2_endpoint: false
+        # ---- endpoint (FDE) tightness ----
+        # Ascending FDE thresholds (metres) paired with their matching scores. A
+        # distance below endpoint_thresholds[0] scores endpoint_scores[0], below
+        # [1] -> [1], ...; past the last threshold scores 0.0. TIGHTEST by default
+        # (the scratch1_format_pdms_* schedule); loosen by scaling thresholds up
+        # (e.g. [24,36,48,60,72] = the scratch2_softerrrrr2_* schedule).
+        endpoint_thresholds: [2.0, 4.0, 6.0, 10.0, 15.0]
+        endpoint_scores: [1.0, 0.8, 0.6, 0.4, 0.2]
+        # scratch2 EXACT: endpoint distance is MANHATTAN (|dx| + |dy|) as in
+        # scratch2_softerrrrr2_dac_ttc_noCoT.py's endpoint_reward (np.sum(np.abs(...))),
+        # NOT Euclidean; default "l2" keeps other configs byte-compatible.
+        endpoint_metric: l1
+        # ---- STRICT FORMAT GATE (hard zero on any format deviation) ----
+        # When true (default), the WHOLE reward (prediction + planning) is zeroed
+        # unless the CoT is EXACTLY one clean <prediction>[...]</prediction>: no
+        # non-whitespace head, no ```json/``` fences, exactly one pair of tags, and
+        # nothing after </prediction>.
+        strict_format_gate: true
+        # ---- STRICT FORMAT GATE v2 (zero-whitespace tail) ----
+        # Refinement of strict_format_gate (only takes effect WHEN that gate is
+        # true). Default FALSE so any IN-FLIGHT training keeps the exact v1
+        # behaviour. v1 allows a valid <prediction>[...]</prediction> to be
+        # followed by ANY amount of whitespace (spaces/newlines) and still score
+        # full prediction reward -- the reward-neutral filler the RL policy
+        # drifts into, padding the response to the token cap
+        # (docs/COT_COLLAPSE_ANALYSIS.md §2④). Set true for NEW runs to require the
+        # tail to be EXACTLY empty after </prediction>: any residual (even
+        # whitespace) -> prediction reward 0 + format_penalty. Naturally-stopped
+        # (EOT) CoTs end exactly at </prediction>, so this never penalises a
+        # cleanly-terminated CoT -- only the whitespace-filler overrun.
+        strict_format_gate_v2: false
+
+  # OPTIONAL — trajectory-aware reward manager (reads the predicted trajectory
+  # directly from non_tensor_batch). Uncomment to use instead of the scorer hook:
+  # reward_manager:
+  #   source: importlib
+  #   name: TransfusionRewardManager
+  #   module:
+  #     path: pkg://recipe.transfusion.reward_manager
+  #     name: TransfusionRewardManager
+
+# ----------------------------------------------------------------------------
+# Tracking + output location
+# ----------------------------------------------------------------------------
+trainer:
+  project_name: transfusion-verl-rl
+  experiment_name: stage1
+  # The Transfusion rollout synthesises a placeholder attention_mask (there is no
+  # real token-level prompt), so sequence-length balancing across DP ranks would
+  # operate on meaningless lengths. Disable it.
+  balance_batch: false
+  # Model / checkpoint output ROOT (absolute so artefacts land next to the other
+  # Transfusion models). At launch, recipe.transfusion.ckpt_layout appends a run
+  # TIMESTAMP subdir, Transfusion-SFT-style:
+  #   <default_local_dir>/<YYYYMMDD_HHMMSS>/{global_step_N, best_*, swanlab, samples, ...}
+  # — UNLESS trainer.resume.enabled below re-points it at the resumed run's dir.
+  default_local_dir: ${oc.env:RL_OUTPUT_ROOT}/${trainer.experiment_name}
+  # ---- training schedule + checkpointing (surfaced for tuning) ----
+  total_epochs: 10                 # passes over the training set
+  save_freq: 200                   # save a checkpoint every N steps (-1 = only at the end)
+  # Run validation every N steps (-1 = never). NOTE: one full-split SFT-style
+  # validation pass costs ~25 min here (12146 val samples @ B=32/GPU), measured
+  # timing_s/testing=1589s on 2026-07-30 -- raising N only trades wall-clock for
+  # metric cadence. For a cheap smoke check set data.val_max_samples instead.
+  test_freq: 200                   # run validation every N steps (-1 = never)
+  max_actor_ckpt_to_keep: 3        # keep only the latest N actor checkpoints (null = keep all)
+  val_before_train: false           # run one validation pass before training starts
+  # World-size is auto-detected by run_grpo_transfusion.sh and injected as
+  # `trainer.nnodes=<N> trainer.n_gpus_per_node=<G>` on the CLI, so it is NOT
+  # hardcoded here (which would go stale / lie about node count when launching
+  # outside the script). Fallbacks: ppo_trainer defaults nnodes:1 n_gpus_per_node:8.
+  # ---- checkpoint contents + resume (Transfusion-SFT-style, train_qwen3p5.py) ----
+  # true: periodic global_step_* ckpts carry model + OPTIMIZER/scheduler/rng shards
+  # (=> verbatim-resumable, ~2-3x the disk of weights-only). false: weights-only.
+  # Mapped at launch onto actor_rollout_ref.actor.checkpoint.save_contents =
+  # ['model','optimizer','extra'] vs ['model','extra'] (load_contents follows it).
+  save_optimizer: true
+  # Resume switch + parameter (learned from Code/Transfusion's `resume:` block):
+  #   enabled: true continues a run IN PLACE (no new timestamp dir is minted).
+  #   resume_path accepts EITHER a run's timestamp dir
+  #   (.../RL/<exp>/<YYYYMMDD_HHMMSS>; the latest global_step_* inside it is used)
+  #   OR a specific .../global_step_N dir; null -> auto-detect the latest run under
+  #   default_local_dir (nothing found -> warn + start fresh, verl 'auto' semantics).
+  #   A verbatim resume (optimizer/LR/step/dataloader) needs ckpts that were saved
+  #   with save_optimizer: true; otherwise it degrades to a weights-only warm start.
+  resume:
+    enabled: false
+    resume_path: null
+    # enabled: true
+    # resume_path: ${trainer.default_local_dir}/20260825_074421
+  # (verl's native trainer.resume_mode / resume_from_path need NO setting here —
+  #  they are derived at launch from trainer.resume above: "disable" for a fresh
+  #  run, "resume_path" + the resolved dir when resuming.)
+  # Keep the best checkpoint(s) by a validation metric (Transfusion-style), copied
+  # to <output>/best_<metric>.ckpt/ with a best.json pointer. Empty list = off. Each
+  # `name` is matched against verl's val-core/<data_source>/<name>/mean (e.g.
+  # pdms_reward / L2 / score / cot_reward); set higher_is_better per metric.
+  best_metrics:
+    - { name: pdms_reward, higher_is_better: true }   # NAVSIM PDM Score (primary)
+    # - { name: L2, higher_is_better: false }          # also keep best-by-L2
+    # - { name: score, higher_is_better: true }        # ... or best total reward
+  best_ckpt_background_copy: true   # copy the best ckpt in a background thread (non-blocking)
+  # Experiment-tracking backends (verl/utils/tracking.py). SwanLab (cloud) + console.
+  # The SwanLab token is supplied via SWANLAB_API_KEY in the ray_kwargs block
+  # below; verl calls swanlab.login(SWANLAB_API_KEY) then
+  # swanlab.init(project=trainer.project_name, experiment_name=trainer.experiment_name).
+  logger: ["console"]
+  # verl-NATIVE val logging (a SEPARATE system from the Transfusion-style
+  # per-sample artefacts configured by the TRANSFUSION_* env vars below): logs the
+  # first N val generations to SwanLab as a prompt/response/score table, and dumps
+  # per-sample rewards / metrics / trajectories to disk for later review.
+  log_val_generations: 10
+  rollout_data_dir: ${trainer.default_local_dir}/rollout_data
+  validation_data_dir: ${trainer.default_local_dir}/validation_data
+
+# ----------------------------------------------------------------------------
+# Ray worker environment — propagate the recipe paths + registration hook into
+# every Ray worker so `recipe.*` / `transfusion.*` import and the custom
+# rollout/engine get registered. (Infrastructure only; no RL params touched.)
+# Adjust the absolute paths if you relocate the repos.
+# ----------------------------------------------------------------------------
+ray_kwargs:
+  ray_init:
+    # ---- JOIN AN EXISTING MULTI-NODE RAY CLUSTER ----
+    # verl (main_ppo.run_ppo) calls ray.init(**this block). WITHOUT an `address`
+    # it spins up a FRESH SINGLE-NODE local Ray cluster on whatever node this
+    # script runs. To train across nodes, run_grpo_transfusion.sh (which
+    # auto-detects nodes/GPUs, mirrors the SFT DeepSpeed launcher) starts ONE Ray
+    # cluster spanning all nodes and injects the head as a CLI override:
+    #   ray_kwargs.ray_init.address=<head_ip>:<port>
+    # so this file stays MACHINE-AGNOSTIC (no hardcoded IP). A plain launch
+    # without that override just starts a local cluster, like verl's ppo_trainer.
+    # NOTE: `node_ip_address` is deliberately NOT set -- this Ray version's
+    # ray.init() rejects it as an unknown keyword (it lives on `ray start`); the
+    # driver auto-detects its own node IP from the socket.
+    runtime_env:
+      env_vars:
+        VERL_USE_EXTERNAL_MODULES: recipe.transfusion.registrations
+        # Architecture config used by train_qwen3p5.build_model; it must match
+        # the checkpoint supplied through TRANSFUSION_CKPT.
+        TRANSFUSION_CONFIG: ${oc.env:TRANSFUSION_CONFIG}
+        TRANSFUSION_ROOT: ${oc.env:TRANSFUSION_ROOT}
+        # ---- SELF-CONTAINED MODEL LOADING (no original Qwen3.5-2B backbone, no
+        #      train-data mount; backbone + processor + stats all come from the
+        #      checkpoint dir / recipe) ----
+        # Backbone architecture + in-model AutoProcessor (tokenizer + image/video
+        # processor) source: the trained model's own HF dir (best/pytorch_model).
+        # build_transfusion_model applies it to model.qwen_model_name; the backbone
+        # weights built from it are OVERWRITTEN by TRANSFUSION_CKPT (full
+        # qwen_model.* + head state dict). Mirrors actor_rollout_ref.model.path so
+        # verl + the dataset + the in-model processor all agree.
+        TRANSFUSION_QWEN_MODEL_NAME: ${actor_rollout_ref.model.path}
+        # OPTIONAL: freeze the ViT (visual tower) during the RL actor update.
+        # "false" trains the ViT; "true" freezes it after checkpoint loading.
+        # This reuses the SFT freeze mechanism in the actor engine, the rollout
+        # policy and the KL
+        # reference. NOTE (FSDP1, use_orig_params=false): if FSDP raises about
+        # mixed requires_grad inside one flat-param unit, also set
+        # actor_rollout_ref.actor.fsdp_config.use_orig_params: true.
+        TRANSFUSION_FREEZE_VIT: ${oc.env:TRANSFUSION_FREEZE_VIT,"true"}
+        # Action-norm stats JSON (recipe-bundled copy). load_or_compute_action_norm_stats
+        # returns early when this file has per-timestep quantiles; the VALUES are
+        # overwritten by the checkpoint's action_q01/q99, so this only needs to be an
+        # accessible file (avoids reading the original train-data mount to recompute).
+        TRANSFUSION_STATS_FILE: ${oc.env:TRANSFUSION_STATS_FILE}
+        # ---- LOAD A TRAINED MODEL (the model-loading "place") ----
+        # Path to a trained Transfusion checkpoint (supervised SFT model or a previous
+        # RL model) loaded on top of the qwen backbone by build_transfusion_model, in
+        # the training engine AND the rollout, in the driver AND every Ray worker.
+        # Empty = cold-start from the backbone only. Accepts a run's `best/` dir (it
+        # holds pytorch_model/model.safetensors), a `checkpoint-N/` dir, or any dir with
+        # model.safetensors / pytorch_model.bin / sharded model-*.safetensors.
+        # Env-overridable (run scripts export it); default here loads the model whose
+        # config_original.yaml is set in $TRANSFUSION_CONFIG above (they MUST match).
+        TRANSFUSION_CKPT: ${oc.env:TRANSFUSION_CKPT}
+        PYTHONPATH: ${oc.env:AUGUSTUS_GRPO_ROOT}:${oc.env:AUGUSTUS_SFT_ROOT}
+        # ---- SwanLab experiment tracking ----
+        # verl reads the SwanLab token from SWANLAB_API_KEY. Cloud upload is the
+        # opt-in mode; the release draft defaults to console logging. The local SwanLab cache is written
+        # INTO the run dir (default_local_dir) so it sits next to the ckpts.
+        # RESUME: same run dir => SAME cloud experiment — the experiment id is
+        # persisted in <logdir>/run_id.txt and replayed with resume="allow"
+        # (recipe.transfusion.registrations; same convention as SFT); a fresh
+        # run's new timestamp dir starts a new experiment.
+        # By default the token is pulled from the shell env (the run scripts export
+        # it); to hardcode it here replace the ${oc.env:...} with your literal token,
+        # e.g.  SWANLAB_API_KEY: "your-swanlab-token".
+        # WARNING: do NOT commit a real token to a shared / version-controlled repo.
+        SWANLAB_API_KEY: ${oc.env:SWANLAB_API_KEY,""}
+        SWANLAB_MODE: ${oc.env:SWANLAB_MODE,"offline"}
+        SWANLAB_LOG_DIR: ${trainer.default_local_dir}/swanlab
+        # ---- Transfusion-style per-sample logging (recipe.transfusion.sample_logging) ----
+        # Rich per-sample artefacts (prompt text / GT-vs-pred trajectory plot /
+        # per-step L2 / CoT / bbox) written under <output_dir>/samples/ + best-effort
+        # SwanLab. ENV VARS (not trainer.*) because the logger is a process-wide
+        # singleton read in the driver AND every Ray worker, where the Hydra config
+        # object is unavailable. TRANSFUSION_OUTPUT_DIR forwards trainer.default_local_dir;
+        # TRANSFUSION_LOG_NUM_SAMPLES mirrors trainer.log_val_generations (edit that one).
+        TRANSFUSION_OUTPUT_DIR: ${trainer.default_local_dir}
+        TRANSFUSION_LOG_NUM_SAMPLES: "${trainer.log_val_generations}"
+        # Volume control for the per-sample TRAIN artefacts (train_samples/* +
+        # rollout_data/{step}.jsonl; the train_reward/* means still flush every
+        # step): with TRANSFUSION_LOG_FIRST_STEPS=N only the first N steps plus
+        # the one step right after each validation pass are recorded (that rule
+        # needs the validation cadence — hence TEST_FREQ mirrors trainer.test_freq
+        # via Hydra interpolation; edit trainer.test_freq). UNSET these two to
+        # restore the original "every step" behaviour.
+        TRANSFUSION_TEST_FREQ: "${trainer.test_freq}"
+        TRANSFUSION_LOG_FIRST_STEPS: "10"
+        # GRPO in-group overlay plots: render the first K groups' rollout.n
+        # sampled trajectories vs GT per logged train step (0 = off).
+        TRANSFUSION_LOG_NUM_GROUPS: "3"

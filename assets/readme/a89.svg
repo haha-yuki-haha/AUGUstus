@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="128" viewBox="0 0 820 128" role="img" aria-labelledby="title desc">
+  <title id="title">AUGUstus public benchmarks, in-house training, and deployment</title>
+  <desc id="desc">One row with three groups. Public benchmarks: 94.6 PDMS on NAVSIM v1, 90.7 EPDMS on NAVSIM v2, and 0.27 m average L2 on nuScenes. In-house training: 512 NVIDIA H800 GPUs, over 318 thousand video hours and over 513 billion tokens. Training about 2 days. Real-vehicle deployment: 12 Hz.</desc>
+  <rect x=".5" y=".5" width="819" height="127" rx="9" fill="#fcf4f6" stroke="#ead7df"/>
+  <g stroke="#e6cad5"><path d="M340 12v104"/><path d="M684 12v104"/></g>
+  <g font-family="Segoe UI, Arial, sans-serif" text-anchor="middle">
+    <g fill="#875366" font-size="11" font-weight="650" letter-spacing=".3"><text x="174" y="24">Public Benchmarks</text><text x="512" y="24">In-House Training</text><text x="749" y="24">Deployment</text></g>
+    <g fill="#826774" font-size="9.5"><text x="66" y="45">NAVSIM v1</text><text x="174" y="45">NAVSIM v2</text><text x="282" y="45">nuScenes</text><text x="402" y="45">NVIDIA H800</text><text x="513" y="45">Driving video</text><text x="624" y="45">Training</text><text x="749" y="45">Real vehicle</text></g>
+    <g fill="#90283e" font-size="28" font-weight="730" letter-spacing="-.7"><text x="66" y="76">94.6</text><text x="174" y="76">90.7</text><text x="282" y="76">0.27<tspan font-size="13.5" letter-spacing="0"> m</tspan></text><text x="402" y="76">512</text><text x="513" y="76">318K<tspan font-size="18" dy="-2">+</tspan></text><text x="624" y="76">513B<tspan font-size="18" dy="-2">+</tspan></text><text x="749" y="76">12<tspan font-size="13.5" letter-spacing="0"> Hz</tspan></text></g>
+    <g fill="#6f5866" font-size="9.5"><text x="66" y="95">PDMS</text><text x="174" y="95">EPDMS</text><text x="282" y="95">Average L2</text><text x="402" y="95">GPUs</text><text x="513" y="95">Hours</text><text x="624" y="95">Tokens</text><text x="749" y="95">On-vehicle</text></g>
+    <g fill="#9a7d8c" font-size="8"><text x="66" y="112">without scorer</text><text x="174" y="112">1-step denoising</text><text x="282" y="112">0.05% collision</text><text x="512" y="112" fill="#875366">Training about 2 days</text><text x="749" y="112">Preliminary test</text></g>
+  </g>
+</svg>

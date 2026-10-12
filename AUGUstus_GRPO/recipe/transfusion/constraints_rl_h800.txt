@@ -1,0 +1,10 @@
+# AUGUstus GRPO h800 GPU profile constraints
+
+torch==2.7.0
+numpy==1.26.4
+transformers==5.9.0
+protobuf<7
+tensordict==0.10.0
+nvidia-nccl-cu12==2.26.2
+ray==2.55.1
+pyarrow==24.0.0

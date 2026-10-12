@@ -1,0 +1,10 @@
+# AUGUstus GRPO default GPU profile constraints
+
+torch==2.13.0
+numpy==1.26.4
+transformers==5.9.0
+protobuf==4.25.3
+tensordict==0.10.0
+nvidia-nccl-cu13==2.29.7
+ray==2.55.1
+pyarrow==24.0.0

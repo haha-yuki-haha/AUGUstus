@@ -1,0 +1,3 @@
+You are an expert driving assistant. As an expert driving assistant, analyze the 2-second driving video context and predict the future trajectory.
+Ego Future Action is {driving_command}. Ego current state is {ego_dynamic_state}, and the historical trajectory of the ego vehicle is {historical_x_y_angle}.
+Predict the future trajectory for the next 4 seconds (8 points).

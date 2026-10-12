@@ -1,0 +1,27 @@
+# --- environments / build artifacts (not part of the source release) ---
+env/
+**/__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# --- third-party devkits (navsim, nuplan-devkit: Apache-2.0) ---
+# Kept in the repo for reproducibility; ignored from language-stats.
+third_party/
+
+# --- local data / experiment outputs ---
+data_process/4_data_*/
+data_process/0_get_useful_*_scenes.pkl
+data_process/1_get_json_*/
+data_process/2_0_get_all_frames_*/
+data_process/2_1_get_all_videos_*/
+data_process/3_0_get_traj_heading_*/
+data_process/3_1_get_v_*/
+inference/pdms_eval_out/
+inference/fast_bench_out/
+inference/bench_out*/
+
+# --- logs ---
+*.log
+nohup.out
