@@ -361,7 +361,7 @@ Click a cover to view the corresponding video from the supplementary material.
 
 ## 📬 Contact
 
-- **📧 Email:** [yeyuqi0303@stu.pku.edu.cn](mailto:yeyuqi0303@stu.pku.edu.cn)
+- **📧 Email:** [yeyuqi0303@stu.pku.edu.cn](mailto:yeyuqi0303@stu.pku.edu.cn) and [cjiangad@connect.ust.hk](mailto:cjiangad@connect.ust.hk)
 - **💬 WeChat:** `yuki-hahaha-yuki` and `Callmejohnjiang`
 
 <!-- - **X:** [yuqi ye (@yuqiye3)](https://x.com/yuqiye3) -->
