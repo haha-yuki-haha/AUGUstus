@@ -19,7 +19,7 @@
   <sub><sup>1</sup> Peking University · <sup>2</sup> XPeng Motors · <sup>3</sup> Fudan University</sub>
 </p>
 <p align="center">
-  <img src="assets/readme/a88.svg" height="36" alt="Paper"> &nbsp;
+  <a href="https://arxiv.org/pdf/2610.16985"><img src="assets/readme/a88.svg" height="36" alt="arXiv Paper"></a> &nbsp;
   <a href="https://github.com/haha-yuki-haha/AUGUstus"><img src="assets/readme/a86.svg" height="36" alt="Code"></a> &nbsp;
   <a href="https://huggingface.co/yuki-hahaha/AUGUstus"><img src="assets/readme/a87.svg" height="36" alt="Models"></a>
 </p>
@@ -320,18 +320,18 @@ Start with these files when changing the implementation:
 
 ## 🎬 Visualizations
 
-Click a cover to view the corresponding video from the supplementary material.
+The animations play automatically. Click an animation to view the full-resolution video.
 
 ### NAVSIM v1
 
 <table align="center">
   <tr>
-    <td align="center" valign="top" width="50%"><a href="assets/b11.mp4"><img src="assets/a65.jpg" width="100%" alt="NAVSIM · 01: click to play"></a><br><a href="assets/b11.mp4">▶ NAVSIM · 01</a></td>
-    <td align="center" valign="top" width="50%"><a href="assets/b12.mp4"><img src="assets/a66.jpg" width="100%" alt="NAVSIM · 02: click to play"></a><br><a href="assets/b12.mp4">▶ NAVSIM · 02</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b11.mp4"><img src="assets/b11.gif" width="100%" alt="NAVSIM · 01: animated preview"></a><br><a href="assets/b11.mp4">▶ NAVSIM · 01</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b12.mp4"><img src="assets/b12.gif" width="100%" alt="NAVSIM · 02: animated preview"></a><br><a href="assets/b12.mp4">▶ NAVSIM · 02</a></td>
   </tr>
   <tr>
-    <td align="center" valign="top" width="50%"><a href="assets/b13.mp4"><img src="assets/a67.jpg" width="100%" alt="NAVSIM · 03: click to play"></a><br><a href="assets/b13.mp4">▶ NAVSIM · 03</a></td>
-    <td align="center" valign="top" width="50%"><a href="assets/b14.mp4"><img src="assets/a68.jpg" width="100%" alt="NAVSIM · 04: click to play"></a><br><a href="assets/b14.mp4">▶ NAVSIM · 04</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b13.mp4"><img src="assets/b13.gif" width="100%" alt="NAVSIM · 03: animated preview"></a><br><a href="assets/b13.mp4">▶ NAVSIM · 03</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b14.mp4"><img src="assets/b14.gif" width="100%" alt="NAVSIM · 04: animated preview"></a><br><a href="assets/b14.mp4">▶ NAVSIM · 04</a></td>
   </tr>
 </table>
 
@@ -339,12 +339,12 @@ Click a cover to view the corresponding video from the supplementary material.
 
 <table align="center">
   <tr>
-    <td align="center" valign="top" width="50%"><a href="assets/b01.mp4"><img src="assets/a16.jpg" width="100%" alt="In-house · 01: click to play"></a><br><a href="assets/b01.mp4">▶ In-house · 01</a></td>
-    <td align="center" valign="top" width="50%"><a href="assets/b02.mp4"><img src="assets/a17.jpg" width="100%" alt="In-house · 02: click to play"></a><br><a href="assets/b02.mp4">▶ In-house · 02</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b01.mp4"><img src="assets/b01.gif" width="100%" alt="In-house · 01: animated preview"></a><br><a href="assets/b01.mp4">▶ In-house · 01</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b02.mp4"><img src="assets/b02.gif" width="100%" alt="In-house · 02: animated preview"></a><br><a href="assets/b02.mp4">▶ In-house · 02</a></td>
   </tr>
   <tr>
-    <td align="center" valign="top" width="50%"><a href="assets/b03.mp4"><img src="assets/a18.jpg" width="100%" alt="In-house · 03: click to play"></a><br><a href="assets/b03.mp4">▶ In-house · 03</a></td>
-    <td align="center" valign="top" width="50%"><a href="assets/b04.mp4"><img src="assets/a19.jpg" width="100%" alt="In-house · 04: click to play"></a><br><a href="assets/b04.mp4">▶ In-house · 04</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b03.mp4"><img src="assets/b03.gif" width="100%" alt="In-house · 03: animated preview"></a><br><a href="assets/b03.mp4">▶ In-house · 03</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b04.mp4"><img src="assets/b04.gif" width="100%" alt="In-house · 04: animated preview"></a><br><a href="assets/b04.mp4">▶ In-house · 04</a></td>
   </tr>
 </table>
 
@@ -352,8 +352,8 @@ Click a cover to view the corresponding video from the supplementary material.
 
 <table align="center">
   <tr>
-    <td align="center" valign="top" width="50%"><a href="assets/b19.mp4"><img src="assets/a73.jpg" width="100%" alt="Real vehicle · 01: click to play"></a><br><a href="assets/b19.mp4">▶ Real vehicle · 01</a></td>
-    <td align="center" valign="top" width="50%"><a href="assets/b20.mp4"><img src="assets/a74.jpg" width="100%" alt="Real vehicle · 02: click to play"></a><br><a href="assets/b20.mp4">▶ Real vehicle · 02</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b19.mp4"><img src="assets/b19.gif" width="100%" alt="Real vehicle · 01: animated preview"></a><br><a href="assets/b19.mp4">▶ Real vehicle · 01</a></td>
+    <td align="center" valign="top" width="50%"><a href="assets/b20.mp4"><img src="assets/b20.gif" width="100%" alt="Real vehicle · 02: animated preview"></a><br><a href="assets/b20.mp4">▶ Real vehicle · 02</a></td>
   </tr>
 </table>
 
@@ -381,11 +381,13 @@ We thank [Qwen](https://huggingface.co/Qwen/Qwen3.5-2B), [verl](https://github.c
 ## 📚 Citation
 
 ```bibtex
-@misc{ye2026augustus,
+@misc{ye2026augustusautonomousdrivingvla,
   title={AUGUstus: Autonomous Driving VLA Model with Unified Generation and Understanding},
-  author={Ye, Yuqi and Jiang, Caigao and Wang, Zhuonan and Pei, Congyuan and Qu, Chao and Peng, Changhao and Lin, Junhong and Yu, Qize
-    and Song, Zetian and Fu, Guangzhao and Wu, Chongruo and Huang, Shiyu and Zhou, Shuchang and Yang, Honggou and Gao, Wei},
+  author={Yuqi Ye and Caigao Jiang and Zhuonan Wang and Congyuan Pei and Chao Qu and Changhao Peng and Junhong Lin and Qize Yu and Zetian Song and Guangzhao Fu and Chongruo Wu and Shiyu Huang and Shuchang Zhou and Honggou Yang and Wei Gao},
   year={2026},
-  note={Research manuscript}
+  eprint={2610.16985},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV},
+  url={https://arxiv.org/abs/2610.16985},
 }
 ```

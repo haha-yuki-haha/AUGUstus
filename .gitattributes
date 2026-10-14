@@ -9,3 +9,4 @@
 *.pdf binary
 *.svg text eol=lf
 *.mp4 binary
+*.gif binary
