@@ -23,6 +23,9 @@
   <a href="https://github.com/haha-yuki-haha/AUGUstus"><img src="assets/readme/a86.svg" height="36" alt="Code"></a> &nbsp;
   <a href="https://huggingface.co/yuki-hahaha/AUGUstus"><img src="assets/readme/a87.svg" height="36" alt="Models"></a>
 </p>
+<p align="center">
+  <a href="https://paperswithcode.co/api/v1/papers/2610.16985/leaderboard-badge-link?eval=38963"><img src="https://paperswithcode.co/api/v1/papers/2610.16985/leaderboard-badge.svg?eval=38963&live=1" alt="Papers with Code: SOTA on nuScenes Open-Loop Planning (ST-P3)"></a>
+</p>
 <p align="center"><b>🌐 Project Page:</b> <a href="https://augustus-ad.github.io/">https://augustus-ad.github.io/</a></p>
 <p align="center"><a href="#overview">Overview</a> · <a href="#benchmarks-and-runtime">Results</a> · <a href="#installation">Installation</a> · <a href="#data-preparation">Data</a> · <a href="#supervised-fine-tuning">SFT</a> · <a href="#grpo-post-training">GRPO</a> · <a href="#inference-and-evaluation">Inference</a> · <a href="#code-guide">Code Guide</a> · <a href="#visualizations">Visualizations</a> · <a href="#contact">Contact</a></p>
 
