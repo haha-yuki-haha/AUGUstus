@@ -363,8 +363,7 @@ The animations play automatically. Click an animation to view the full-resolutio
 
 - **📧 Email:** [yeyuqi0303@stu.pku.edu.cn](mailto:yeyuqi0303@stu.pku.edu.cn) and [cjiangad@connect.ust.hk](mailto:cjiangad@connect.ust.hk)
 - **💬 WeChat:** `yuki-hahaha-yuki` and `Callmejohnjiang`
-
-<!-- - **X:** [yuqi ye (@yuqiye3)](https://x.com/yuqiye3) -->
+- **𝕏 X:** [yuki_hahaha](https://x.com/yuki_hahaha)
 
 For any questions, please open an issue or contact us directly.
 
